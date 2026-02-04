@@ -1,38 +1,60 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Verlyn — Coming Soon</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verlyn — Private Literary Archive</title>
+
+  <meta name="description" content="Verlyn is a private literary archive. A work in formation." />
+  <meta name="theme-color" content="#0b0d10" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+  <!-- Editorial serif + neutral sans -->
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital@0;1&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
+  <div class="grain"></div>
 
-<canvas id="void"></canvas>
+  <main class="container">
+    <section class="hero">
+      <h1>VERLYN</h1>
+      <p class="tagline">A private literary archive.<br>Something is forming.</p>
 
-<main class="stage">
-  <h1 class="logo">VERLYN</h1>
-  <p class="tagline">Something timeless is forming.</p>
+      <div class="urdu">
+        خاموشی بھی ایک بیان ہوتی ہے
+      </div>
+    </section>
 
-  <div class="divider"></div>
-  <p class="soon">BANG BANG</p>
+    <section class="divider"></section>
 
-  <section class="panel">
-    <h3>Contact</h3>
-    <p>Business: <a href="mailto:admin@verlyn.in">admin@verlyn.in</a></p>
-    <p>Personal: <a href="mailto: nahfoy@aol.com">nahfoy@aol.com</a></p>
-    <p>WhatsApp: <a href="https://wa.me/17097007361">+1 (709) 700 7361</a></p>
-  </section>
+    <section class="info">
+      <div class="block">
+        <h2>Contact</h2>
+        <p>Business — <a href="mailto:admin@verlyn.in">admin@verlyn.in</a></p>
+        <p>Personal — <a href="mailto: nahfoy@aol.com">nahfoy@aol.com</a></p>
+        <p>WhatsApp — <a href="https://wa.me/17097007361">+1&nbsp;709&nbsp;700&nbsp;7361</a></p>
+      </div>
 
-  <section class="panel">
-    <h3>Leadership</h3>
-    <p>Founder — Takeshi</p>
-    <p>Co-founders — Shin & Ken</p>
-  </section>
+      <div class="block">
+        <h2>Leadership</h2>
+        <p>Founder — Takeshi</p>
+        <p>Co-founder — Shin & Ken</p>
+      </div>
+    </section>
 
-  <footer>© Verlyn.in x Shinken.in</footer>
-</main>
+    <footer>
+      <p>Verlyn × <span>Shinken.in</span></p>
+      <p class="copyright">© All works reserved</p>
+    </footer>
+  </main>
 
-<script src="script.js"></script>
+  <canvas id="void"></canvas>
+
+  <script src="script.js"></script>
 </body>
 </html>
