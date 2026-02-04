@@ -1,114 +1,18 @@
-:root {
-  --bg: #0b0d10;
-  --text: #e6e6e6;
-  --muted: #9b9b9b;
-  --accent: #cfcfcf;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'Inter', system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-body {
-  min-height: 100vh;
-  overflow-x: hidden;
-}
-
-/* subtle paper grain */
-.grain {
-  position: fixed;
-  inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-  pointer-events: none;
-  z-index: 1;
-}
-
-.container {
-  position: relative;
-  z-index: 2;
-  padding: 64px 24px 40px;
-  max-width: 720px;
-  margin: 0 auto;
-}
-
-.hero h1 {
-  font-family: 'Playfair Display', serif;
-  letter-spacing: 0.35em;
-  font-size: clamp(2.2rem, 10vw, 3.5rem);
-  margin: 0;
-}
-
-.tagline {
-  margin-top: 16px;
-  font-size: 0.95rem;
-  color: var(--muted);
-  line-height: 1.6;
-}
-
-.urdu {
-  margin-top: 24px;
-  font-size: 1.1rem;
-  opacity: 0.85;
-  font-family: serif;
-}
-
-.divider {
-  height: 1px;
-  background: linear-gradient(to right, transparent, #333, transparent);
-  margin: 56px 0;
-}
-
-.info {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 40px;
-}
-
-.block h2 {
-  font-size: 0.85rem;
-  letter-spacing: 0.15em;
-  color: var(--muted);
-  margin-bottom: 12px;
-}
-
-.block p {
-  margin: 6px 0;
-  font-size: 0.95rem;
-}
-
-a {
-  color: var(--accent);
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
-}
-
-a:hover {
-  border-color: var(--accent);
-}
-
-footer {
-  margin-top: 72px;
-  text-align: center;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-footer span {
-  color: var(--accent);
-}
-
-/* canvas void */
-#void {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:#0b0b0c;color:#e8e8e8;font-family:'Inter',sans-serif}
+.grain{position:fixed;inset:0;background-image:url('https://grainy-gradients.vercel.app/noise.svg');opacity:.05;pointer-events:none}
+.container{min-height:100vh;max-width:760px;margin:auto;padding:64px 20px 32px;display:flex;flex-direction:column;justify-content:space-between}
+.hero{text-align:center}
+.logo{font-family:'Libre Baskerville',serif;font-size:clamp(48px,12vw,88px);letter-spacing:.25em;margin-bottom:16px}
+.tagline{font-size:14px;opacity:.7}
+.sub{font-size:13px;opacity:.5}
+.actions{display:flex;justify-content:center;gap:16px;margin:48px 0}
+.depth{background:#111;color:#e8e8e8;border:1px solid rgba(255,255,255,.1);padding:14px 28px;font-size:13px;letter-spacing:.12em;text-transform:uppercase;border-radius:6px;box-shadow:0 12px 30px rgba(0,0,0,.6)}
+.depth:active{transform:translateY(2px)}
+.info{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+.block h3{font-size:12px;letter-spacing:.2em;margin-bottom:12px;opacity:.6}
+.block p,.block a{font-size:13px;opacity:.85;color:inherit;text-decoration:none}
+.name{cursor:pointer;margin-bottom:8px}
+.bio{margin-top:24px;font-size:13px;line-height:1.6;opacity:0;transition:opacity .4s}
+.bio.active{opacity:.85}
+footer{display:flex;justify-content:space-between;font-size:11px;opacity:.4}
