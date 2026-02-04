@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: radial-gradient(circle at top, #0a0c14, #02030a 70%);
+  color: #e8e8e8;
+  overflow: hidden;
+}
+
+canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+.stage {
+  position: relative;
+  z-index: 2;
+  min-height: 100vh;
+  padding: 90px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.logo {
+  font-size: clamp(3rem, 11vw, 6.5rem);
+  letter-spacing: 0.4em;
+  font-weight: 600;
+}
+
+.tagline {
+  opacity: 0.6;
+  margin-top: 18px;
+}
+
+.divider {
+  width: 140px;
+  height: 1px;
+  margin: 46px 0;
+  background: linear-gradient(to right, transparent, #666, transparent);
+}
+
+.soon {
+  letter-spacing: 0.45em;
+  opacity: 0.55;
+  margin-bottom: 70px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 420px;
+  margin-bottom: 26px;
+  padding: 22px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(14px);
+  border-radius: 18px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+}
+
+.panel h3 {
+  margin-bottom: 14px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.panel p {
+  font-size: 0.95rem;
+  opacity: 0.7;
+  margin-bottom: 8px;
+}
+
+.panel a {
+  color: #cfcfcf;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(255,255,255,0.2);
+}
+
+footer {
+  margin-top: 70px;
+  font-size: 0.75rem;
+  opacity: 0.35;
+}
