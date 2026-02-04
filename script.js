@@ -1,17 +1,31 @@
 const reveal = document.getElementById('reveal');
+const tone = document.getElementById('tone');
 
-document.querySelector('[data-action="instagram"]').onclick = () => {
-  window.open('https://instagram.com/verlyn.in', '_blank');
+function ritualSound(){
+  tone.currentTime = 0;
+  tone.play().catch(()=>{});
+}
+
+document.querySelectorAll('.portal').forEach(el=>{
+  el.addEventListener('click',()=>{
+    ritualSound();
+    setTimeout(()=>{
+      if(el.dataset.go==='ig'){
+        window.location.href='https://instagram.com/verlyn.in';
+      }else{
+        window.location.href='https://shinken.in';
+      }
+    },450);
+  });
+});
+
+document.querySelector('[data-person="shin"]').onclick=()=>{
+  ritualSound();
+  reveal.textContent='Founder — language, vision, authorship.';
+  reveal.classList.add('show');
 };
-
-document.querySelector('[data-action="shinken"]').onclick = () => {
-  window.open('https://shinken.in', '_blank');
-};
-
-document.querySelector('[data-person="shin"]').onclick = () => {
-  reveal.textContent = 'Founder. Architect of silence and structure.';
-};
-
-document.querySelector('[data-person="ken"]').onclick = () => {
-  reveal.textContent = 'Co-founder. Keeper of clarity and restraint.';
+document.querySelector('[data-person="ken"]').onclick=()=>{
+  ritualSound();
+  reveal.textContent='Co-founder — systems, structure, execution.';
+  reveal.classList.add('show');
 };

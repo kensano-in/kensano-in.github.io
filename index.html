@@ -1,47 +1,58 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Verlyn</title>
-  <link rel="stylesheet" href="style.css"/>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Verlyn</title>
+<meta name="description" content="A quiet, sacred threshold. Verlyn is forming." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-  <main class="stage">
-    <div class="grain"></div>
+<div class="grain"></div>
+<div class="horizon"></div>
 
-    <section class="core">
-      <h1 id="verlyn">VERLYN</h1>
+<main class="stage">
+  <section class="core">
+    <h1 id="verlyn">VERLYN</h1>
 
-      <p class="line">
-        A private literary archive.<br/>
-        Something is forming.
-      </p>
+    <p class="statement">
+      A quiet literary archive<br/>
+      forming beyond the present.
+    </p>
 
-      <p class="urdu">
-        خاموشی بھی ایک بیان ہوتی ہے
-      </p>
+    <p class="urdu">خاموشی بھی ایک بیان ہوتی ہے</p>
 
-      <div class="links">
-        <span class="link" data-action="instagram">Verlyn.in</span>
-        <span class="dot">•</span>
-        <span class="link" data-action="shinken">Shinken.in</span>
-      </div>
+    <div class="portals">
+      <span class="portal" data-go="ig">Verlyn.in</span>
+      <span class="sep">—</span>
+      <span class="portal" data-go="shinken">Shinken.in</span>
+    </div>
 
-      <div class="people">
-        <span class="person" data-person="shin">Shinichiro</span>
-        <span class="dot">•</span>
-        <span class="person" data-person="ken">Ken</span>
-      </div>
+    <div class="people">
+      <span class="person" data-person="shin">Shinichiro</span>
+      <span class="sep">—</span>
+      <span class="person" data-person="ken">Ken</span>
+    </div>
 
-      <div class="reveal" id="reveal"></div>
-    </section>
+    <div id="reveal" class="reveal"></div>
 
-    <footer>
-      © Verlyn × Shinken
-    </footer>
-  </main>
+    <div class="time">
+      <span class="tick">— Days</span>
+      <span class="tick">— Hours</span>
+      <span class="tick">— Minutes</span>
+      <span class="tick">— Seconds</span>
+    </div>
+  </section>
 
-  <script src="script.js"></script>
+  <footer>
+    Verlyn × Shinken
+  </footer>
+</main>
+
+<audio id="tone" src="tone.wav" preload="auto"></audio>
+<script src="script.js"></script>
 </body>
 </html>
