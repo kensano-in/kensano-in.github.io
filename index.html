@@ -3,51 +3,45 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Verlyn — A Private Literary Archive</title>
-  <meta name="description" content="Verlyn is a private literary archive. Something timeless is forming."/>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Inter:wght@300;400&display=swap" rel="stylesheet">
+  <title>Verlyn</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-  <div class="grain"></div>
+  <main class="stage">
+    <div class="grain"></div>
 
-  <main class="container">
-    <section class="hero">
-      <div class="logo">VERLYN</div>
-      <p class="tagline">A private literary archive.</p>
-      <p class="sub">Something timeless is forming.</p>
-    </section>
+    <section class="core">
+      <h1 id="verlyn">VERLYN</h1>
 
-    <section class="actions">
-      <button class="depth" onclick="openIG()">Verlyn</button>
-      <button class="depth" onclick="openShinken()">Shinken</button>
-    </section>
+      <p class="line">
+        A private literary archive.<br/>
+        Something is forming.
+      </p>
 
-    <section class="info">
-      <div class="block">
-        <h3>Contact</h3>
-        <p>Business — <a href="mailto:admin@verlyn.in">admin@verlyn.in</a></p>
-        <p>Personal — <a href="mailto:nahfoy@aol.com">nahfoy@aol.com</a></p>
-        <p>WhatsApp — <a href="https://wa.me/17097007361">+1 709 700 7361</a></p>
+      <p class="urdu">
+        خاموشی بھی ایک بیان ہوتی ہے
+      </p>
+
+      <div class="links">
+        <span class="link" data-action="instagram">Verlyn.in</span>
+        <span class="dot">•</span>
+        <span class="link" data-action="shinken">Shinken.in</span>
       </div>
 
-      <div class="block">
-        <h3>Leadership</h3>
-        <p class="name" onclick="show('shin')">Takeshi</p>
-        <p class="name" onclick="show('ken')">ShinKen</p>
+      <div class="people">
+        <span class="person" data-person="shin">Shinichiro</span>
+        <span class="dot">•</span>
+        <span class="person" data-person="ken">Ken</span>
       </div>
-    </section>
 
-    <section class="bio" id="bio"></section>
+      <div class="reveal" id="reveal"></div>
+    </section>
 
     <footer>
-      <span>Verlyn × <a href="https://shinken.in">Shinken.in</a></span>
-      <span>© All works reserved</span>
+      © Verlyn × Shinken
     </footer>
   </main>
 
-<script src="script.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>

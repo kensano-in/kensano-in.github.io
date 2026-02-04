@@ -1,4 +1,17 @@
-const bio=document.getElementById('bio');
-function show(w){bio.innerHTML=w==='shin'?'<strong>Founder</strong><br>Authorship, narrative direction.<br><em>Building meaning.</em>':'<strong>Co-founder</strong><br>Systems & execution.<br><em>Turning vision into permanence.</em>';bio.classList.add('active')}
-function openIG(){location.href='https://instagram.com/verlyn.in'}
-function openShinken(){location.href='https://shinken.in'}
+const reveal = document.getElementById('reveal');
+
+document.querySelector('[data-action="instagram"]').onclick = () => {
+  window.open('https://instagram.com/verlyn.in', '_blank');
+};
+
+document.querySelector('[data-action="shinken"]').onclick = () => {
+  window.open('https://shinken.in', '_blank');
+};
+
+document.querySelector('[data-person="shin"]').onclick = () => {
+  reveal.textContent = 'Founder. Architect of silence and structure.';
+};
+
+document.querySelector('[data-person="ken"]').onclick = () => {
+  reveal.textContent = 'Co-founder. Keeper of clarity and restraint.';
+};

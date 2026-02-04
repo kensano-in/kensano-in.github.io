@@ -1,18 +1,108 @@
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;background:#0b0b0c;color:#e8e8e8;font-family:'Inter',sans-serif}
-.grain{position:fixed;inset:0;background-image:url('https://grainy-gradients.vercel.app/noise.svg');opacity:.05;pointer-events:none}
-.container{min-height:100vh;max-width:760px;margin:auto;padding:64px 20px 32px;display:flex;flex-direction:column;justify-content:space-between}
-.hero{text-align:center}
-.logo{font-family:'Libre Baskerville',serif;font-size:clamp(48px,12vw,88px);letter-spacing:.25em;margin-bottom:16px}
-.tagline{font-size:14px;opacity:.7}
-.sub{font-size:13px;opacity:.5}
-.actions{display:flex;justify-content:center;gap:16px;margin:48px 0}
-.depth{background:#111;color:#e8e8e8;border:1px solid rgba(255,255,255,.1);padding:14px 28px;font-size:13px;letter-spacing:.12em;text-transform:uppercase;border-radius:6px;box-shadow:0 12px 30px rgba(0,0,0,.6)}
-.depth:active{transform:translateY(2px)}
-.info{display:grid;grid-template-columns:1fr 1fr;gap:32px}
-.block h3{font-size:12px;letter-spacing:.2em;margin-bottom:12px;opacity:.6}
-.block p,.block a{font-size:13px;opacity:.85;color:inherit;text-decoration:none}
-.name{cursor:pointer;margin-bottom:8px}
-.bio{margin-top:24px;font-size:13px;line-height:1.6;opacity:0;transition:opacity .4s}
-.bio.active{opacity:.85}
-footer{display:flex;justify-content:space-between;font-size:11px;opacity:.4}
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=Inter:wght@300;400&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #050505;
+  color: #eaeaea;
+  font-family: 'Inter', sans-serif;
+  min-height: 100vh;
+}
+
+.stage {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.grain {
+  position: fixed;
+  inset: 0;
+  background-image: url('https://grainy-gradients.vercel.app/noise.svg');
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.core {
+  text-align: center;
+  padding: 2rem;
+  max-width: 720px;
+}
+
+h1 {
+  font-family: 'Playfair Display', serif;
+  font-size: clamp(3rem, 10vw, 5rem);
+  letter-spacing: 0.35em;
+  margin-bottom: 1.5rem;
+}
+
+.line {
+  font-size: 0.95rem;
+  opacity: 0.75;
+  margin-bottom: 2rem;
+  line-height: 1.6;
+}
+
+.urdu {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.1rem;
+  opacity: 0.85;
+  margin-bottom: 3rem;
+}
+
+.links, .people {
+  margin: 1rem 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+}
+
+.link, .person {
+  cursor: pointer;
+  position: relative;
+}
+
+.link::after, .person::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100%;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.4s ease;
+}
+
+.link:hover::after, .person:hover::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+.dot {
+  margin: 0 0.6rem;
+  opacity: 0.4;
+}
+
+.reveal {
+  margin-top: 2rem;
+  font-size: 0.85rem;
+  opacity: 0.7;
+  min-height: 1.5em;
+  transition: opacity 0.4s ease;
+}
+
+footer {
+  position: fixed;
+  bottom: 1.2rem;
+  width: 100%;
+  text-align: center;
+  font-size: 0.7rem;
+  opacity: 0.4;
+}
