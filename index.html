@@ -1,33 +1,35 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VERLYN</title>
-  <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <main class="stage">
-    <section class="hero">
-      <h1 class="brand">VERLYN</h1>
-      <p class="tagline">A quiet literary archive<br/>forming beyond the present.</p>
-      <div class="links">
-        <a class="portal" href="https://www.instagram.com/verlyn.in" target="_blank">Verlyn.in</a>
-        <span class="sep">—</span>
-        <a class="portal" href="https://shinken.in" target="_blank">Shinken.in</a>
-      </div>
-      <div class="names">Shinichiro — Ken</div>
-    </section>
+  <div class="grain"></div>
+  <div class="horizon"></div>
 
-    <section class="countdown">
-      <div class="time"><span id="d">00</span><small>Days</small></div>
-      <div class="time"><span id="h">00</span><small>Hours</small></div>
-      <div class="time"><span id="m">00</span><small>Minutes</small></div>
-      <div class="time"><span id="s">00</span><small>Seconds</small></div>
-    </section>
-
-    <footer class="foot">Verlyn × Shinken</footer>
+  <main>
+    <h1 id="verlyn">VERLYN</h1>
+    <p class="subtitle">
+      A private literary archive.<br />
+      Forming beyond the present.
+    </p>
   </main>
+
+  <footer>
+    <div class="line">
+      <span class="link" id="verlynLink">Verlyn.in</span>
+      &times;
+      <span class="link" id="shinkenLink">Shinken.in</span>
+    </div>
+    <div class="line names">Shinichiro — Ken</div>
+  </footer>
+
+  <div id="whisper">Some works are not announced.<br />They are encountered.</div>
+
   <script src="script.js"></script>
 </body>
 </html>
