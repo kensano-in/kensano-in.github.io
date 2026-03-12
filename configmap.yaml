@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: messaging-config
+  namespace: messaging-platform
+data:
+  # Database configurations
+  POSTGRES_HOST: "postgres-cluster.messaging-platform.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "messaging"
+  
+  CASSANDRA_HOST: "cassandra-cluster.messaging-platform.svc.cluster.local"
+  CASSANDRA_PORT: "9042"
+  CASSANDRA_KEYSPACE: "messaging"
+  
+  REDIS_HOST: "redis-cluster.messaging-platform.svc.cluster.local"
+  REDIS_PORT: "6379"
+  
+  ELASTICSEARCH_HOST: "elasticsearch-cluster.messaging-platform.svc.cluster.local"
+  ELASTICSEARCH_PORT: "9200"
+  
+  KAFKA_BROKERS: "kafka-0.kafka.messaging-platform.svc.cluster.local:9092,kafka-1.kafka.messaging-platform.svc.cluster.local:9092,kafka-2.kafka.messaging-platform.svc.cluster.local:9092"
+  
+  # Service configurations
+  USER_SERVICE_URL: "http://user-service:8081"
+  AUTH_SERVICE_URL: "http://auth-service:8082"
+  MESSAGING_SERVICE_URL: "http://messaging-service:8083"
+  WEBSOCKET_GATEWAY_URL: "ws://websocket-gateway:8084"
+  
+  # Feature flags
+  ENABLE_PUSH_NOTIFICATIONS: "true"
+  ENABLE_MESSAGE_ENCRYPTION: "true"
+  ENABLE_RATE_LIMITING: "true"
+  
+  # Rate limiting
+  RATE_LIMIT_REQUESTS: "100"
+  RATE_LIMIT_WINDOW: "60"
+  
+  # Message retention
+  MESSAGE_RETENTION_DAYS: "365"
+  MEDIA_RETENTION_DAYS: "730"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  namespace: messaging-platform
+data:
+  kong.yml: |
+    _format_version: "3.0"
+    _transform: true
+    
+    services:
+      - name: user-service
+        url: http://user-service:8081
+        routes:
+          - name: user-routes
+            paths:
+              - /api/v1/users
+              - /api/v1/contacts
+              - /api/v1/privacy
+            strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 100
+              policy: redis
+              redis_host: redis-cluster
+          - name: jwt
+            config:
+              uri_param_names: []
+              cookie_names: []
+              key_claim_name: iss
+              secret_is_base64: false
+              claims_to_verify:
+                - exp
+      
+      - name: auth-service
+        url: http://auth-service:8082
+        routes:
+          - name: auth-routes
+            paths:
+              - /api/v1/auth
+            strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 20
+              policy: redis
+              redis_host: redis-cluster
+      
+      - name: messaging-service
+        url: http://messaging-service:8083
+        routes:
+          - name: messaging-routes
+            paths:
+              - /api/v1/chats
+              - /api/v1/messages
+            strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 200
+              policy: redis
+              redis_host: redis-cluster
+          - name: jwt
+            config:
+              uri_param_names: []
+              cookie_names: []
+      
+      - name: websocket-gateway
+        url: http://websocket-gateway:8084
+        routes:
+          - name: websocket-routes
+            paths:
+              - /ws
+              - /api/v1/presence
+            strip_path: false

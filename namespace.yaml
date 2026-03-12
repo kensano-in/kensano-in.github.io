@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: messaging-platform
+  labels:
+    name: messaging-platform
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: messaging-platform-staging
+  labels:
+    name: messaging-platform-staging
+    environment: staging
