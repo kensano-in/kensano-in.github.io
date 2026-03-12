@@ -1,4 +1,4 @@
-// WebSocket Gateway - Handles real-time connections and message delivery
+// Messaging Service - Handles message sending, storage, and delivery
 package main
 
 import (
@@ -8,139 +8,102 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/jwtauth/v5"
+	"github.com/gocql/gocql"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	DefaultPort  = "8084"
-	RedisAddr    = "redis:6379"
-	KafkaBrokers = "kafka:9092"
-	TokenSecret  = "your-secret-key-here"
-	
-	// WebSocket settings
-	WriteWait      = 10 * time.Second
-	PongWait       = 60 * time.Second
-	PingPeriod     = 54 * time.Second
-	MaxMessageSize = 512 * 1024 // 512KB
+	DefaultPort   = "8083"
+	CassandraHost = "cassandra:9042"
+	RedisAddr     = "redis:6379"
+	KafkaBrokers  = "kafka:9092"
+	TokenSecret   = "your-secret-key-here"
 )
 
 // Server holds all dependencies
 type Server struct {
+	cassandra   *gocql.Session
 	redis       *redis.Client
-	kafka       sarama.Consumer
-	kafkaProd   sarama.SyncProducer
+	kafka       sarama.SyncProducer
 	router      *chi.Mux
 	tokenAuth   *jwtauth.JWTAuth
-	hub         *Hub
 }
 
-// Hub maintains the set of active clients
-type Hub struct {
-	clients    map[string]*Client // userID -> Client
-	register   chan *Client
-	unregister chan *Client
-	broadcast  chan *MessageEvent
-	mu         sync.RWMutex
+// Message represents a chat message
+type Message struct {
+	MessageID        gocql.UUID `json:"message_id"`
+	ChatID           gocql.UUID `json:"chat_id"`
+	SenderID         gocql.UUID `json:"sender_id"`
+	MessageType      string     `json:"message_type"`
+	Content          string     `json:"content"`
+	EncryptedPayload []byte     `json:"encrypted_payload,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	EditedAt         *time.Time `json:"edited_at,omitempty"`
+	IsDeleted        bool       `json:"is_deleted"`
+	ReplyTo          *gocql.UUID `json:"reply_to,omitempty"`
 }
 
-// Client is a WebSocket client
-type Client struct {
-	hub        *Hub
-	conn       *websocket.Conn
-	send       chan []byte
-	userID     string
-	deviceID   string
-	serverNode string
+// Chat represents a conversation
+type Chat struct {
+	ChatID      gocql.UUID `json:"chat_id"`
+	ChatType    string     `json:"chat_type"`
+	Title       string     `json:"title"`
+	CreatedBy   gocql.UUID `json:"created_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	Participants []ChatParticipant `json:"participants,omitempty"`
 }
 
-// MessageEvent represents a message to be delivered
+// ChatParticipant represents a member of a chat
+type ChatParticipant struct {
+	UserID             gocql.UUID `json:"user_id"`
+	Role               string     `json:"role"`
+	JoinedAt           time.Time  `json:"joined_at"`
+	LastReadMessageID  *gocql.UUID `json:"last_read_message_id,omitempty"`
+}
+
+// SendMessageRequest represents a request to send a message
+type SendMessageRequest struct {
+	ChatID           string `json:"chat_id"`
+	MessageType      string `json:"message_type"`
+	Content          string `json:"content"`
+	EncryptedPayload []byte `json:"encrypted_payload"`
+	ReplyTo          string `json:"reply_to,omitempty"`
+}
+
+// MessageEvent represents a message event for Kafka
 type MessageEvent struct {
-	EventType string          `json:"event_type"`
-	Payload   json.RawMessage `json:"payload"`
-	UserID    string          `json:"user_id,omitempty"`
-	ChatID    string          `json:"chat_id,omitempty"`
-}
-
-// WebSocketMessage represents incoming message from client
-type WebSocketMessage struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
-}
-
-// OutgoingMessage represents outgoing message to client
-type OutgoingMessage struct {
-	Type      string      `json:"type"`
-	Timestamp time.Time   `json:"timestamp"`
-	Payload   interface{} `json:"payload"`
-}
-
-// NewHub creates a new Hub
-func NewHub() *Hub {
-	return &Hub{
-		clients:    make(map[string]*Client),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan *MessageEvent, 256),
-	}
-}
-
-// Run starts the hub
-func (h *Hub) Run() {
-	for {
-		select {
-		case client := <-h.register:
-			h.mu.Lock()
-			h.clients[client.userID] = client
-			h.mu.Unlock()
-			log.Printf("Client registered: %s", client.userID)
-			
-		case client := <-h.unregister:
-			h.mu.Lock()
-			if _, ok := h.clients[client.userID]; ok {
-				delete(h.clients, client.userID)
-				close(client.send)
-			}
-			h.mu.Unlock()
-			log.Printf("Client unregistered: %s", client.userID)
-			
-		case event := <-h.broadcast:
-			h.mu.RLock()
-			if client, ok := h.clients[event.UserID]; ok {
-				select {
-				case client.send <- event.Payload:
-				default:
-					// Client buffer full, close connection
-					close(client.send)
-					delete(h.clients, client.userID)
-				}
-			}
-			h.mu.RUnlock()
-		}
-	}
-}
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins in development, configure for production
-		return true
-	},
+	EventType   string    `json:"event_type"`
+	MessageID   string    `json:"message_id"`
+	ChatID      string    `json:"chat_id"`
+	SenderID    string    `json:"sender_id"`
+	Content     string    `json:"content"`
+	Timestamp   time.Time `json:"timestamp"`
+	Recipients  []string  `json:"recipients"`
 }
 
 func main() {
-	ctx := context.Background()
+	// Initialize Cassandra
+	cluster := gocql.NewCluster(getEnv("CASSANDRA_HOST", CassandraHost))
+	cluster.Keyspace = "messaging"
+	cluster.Consistency = gocql.Quorum
+	cluster.Timeout = 5 * time.Second
+	
+	session, err := cluster.CreateSession()
+	if err != nil {
+		log.Fatalf("Failed to connect to Cassandra: %v", err)
+	}
+	defer session.Close()
 	
 	// Initialize Redis
+	ctx := context.Background()
 	rdb := redis.NewClient(&redis.Options{
 		Addr: getEnv("REDIS_ADDR", RedisAddr),
 	})
@@ -149,51 +112,31 @@ func main() {
 	}
 	defer rdb.Close()
 	
-	// Initialize Kafka consumer
-	kafkaConfig := sarama.NewConfig()
-	kafkaConfig.Consumer.Return.Errors = true
-	
-	consumer, err := sarama.NewConsumer([]string{getEnv("KAFKA_BROKERS", KafkaBrokers)}, kafkaConfig)
-	if err != nil {
-		log.Fatalf("Failed to create Kafka consumer: %v", err)
-	}
-	defer consumer.Close()
-	
 	// Initialize Kafka producer
-	kafkaProdConfig := sarama.NewConfig()
-	kafkaProdConfig.Producer.RequiredAcks = sarama.WaitForAll
-	kafkaProdConfig.Producer.Retry.Max = 3
-	kafkaProdConfig.Producer.Return.Successes = true
+	kafkaConfig := sarama.NewConfig()
+	kafkaConfig.Producer.RequiredAcks = sarama.WaitForAll
+	kafkaConfig.Producer.Retry.Max = 3
+	kafkaConfig.Producer.Return.Successes = true
 	
-	producer, err := sarama.NewSyncProducer([]string{getEnv("KAFKA_BROKERS", KafkaBrokers)}, kafkaProdConfig)
+	producer, err := sarama.NewSyncProducer([]string{getEnv("KAFKA_BROKERS", KafkaBrokers)}, kafkaConfig)
 	if err != nil {
 		log.Fatalf("Failed to create Kafka producer: %v", err)
 	}
 	defer producer.Close()
 	
-	// Initialize hub
-	hub := NewHub()
-	go hub.Run()
-	
 	// Initialize server
 	srv := &Server{
+		cassandra: session,
 		redis:     rdb,
-		kafka:     consumer,
-		kafkaProd: producer,
+		kafka:     producer,
 		router:    chi.NewRouter(),
 		tokenAuth: jwtauth.New("HS256", []byte(getEnv("JWT_SECRET", TokenSecret)), nil),
-		hub:       hub,
 	}
 	
 	srv.setupRoutes()
 	
-	// Start Kafka consumers
-	go srv.consumeMessageEvents()
-	go srv.consumePresenceEvents()
-	go srv.consumeNotificationEvents()
-	
 	port := getEnv("PORT", DefaultPort)
-	log.Printf("WebSocket Gateway starting on port %s", port)
+	log.Printf("Messaging Service starting on port %s", port)
 	if err := http.ListenAndServe(":"+port, srv.router); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
@@ -204,23 +147,41 @@ func (s *Server) setupRoutes() {
 	s.router.Use(middleware.Recoverer)
 	s.router.Use(middleware.RequestID)
 	s.router.Use(middleware.RealIP)
+	s.router.Use(middleware.Timeout(30 * time.Second))
 	
 	// Health check
 	s.router.Get("/health", s.healthHandler)
 	
-	// Metrics endpoint
-	s.router.Get("/metrics", s.metricsHandler)
-	
-	// WebSocket endpoint
-	s.router.Get("/ws", s.handleWebSocket)
-	
-	// REST API for presence
+	// Protected routes
 	s.router.Route("/api/v1", func(r chi.Router) {
 		r.Use(jwtauth.Verifier(s.tokenAuth))
 		r.Use(jwtauth.Authenticator(s.tokenAuth))
 		
-		r.Get("/presence/{userID}", s.getUserPresence)
-		r.Post("/presence", s.updatePresence)
+		// Chat routes
+		r.Post("/chats", s.createChat)
+		r.Get("/chats", s.getChats)
+		r.Get("/chats/{chatID}", s.getChat)
+		r.Put("/chats/{chatID}", s.updateChat)
+		r.Delete("/chats/{chatID}", s.deleteChat)
+		
+		// Chat participants
+		r.Post("/chats/{chatID}/participants", s.addParticipant)
+		r.Delete("/chats/{chatID}/participants/{userID}", s.removeParticipant)
+		r.Put("/chats/{chatID}/participants/{userID}/role", s.updateParticipantRole)
+		
+		// Message routes
+		r.Post("/chats/{chatID}/messages", s.sendMessage)
+		r.Get("/chats/{chatID}/messages", s.getMessages)
+		r.Get("/chats/{chatID}/messages/{messageID}", s.getMessage)
+		r.Put("/chats/{chatID}/messages/{messageID}", s.editMessage)
+		r.Delete("/chats/{chatID}/messages/{messageID}", s.deleteMessage)
+		
+		// Message status
+		r.Post("/chats/{chatID}/messages/{messageID}/read", s.markAsRead)
+		r.Get("/chats/{chatID}/messages/{messageID}/status", s.getMessageStatus)
+		
+		// Typing indicators
+		r.Post("/chats/{chatID}/typing", s.sendTypingIndicator)
 	})
 }
 
@@ -228,516 +189,715 @@ func (s *Server) setupRoutes() {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	
+	// Check Cassandra
+	if err := s.cassandra.Query("SELECT now() FROM system.local").Exec(); err != nil {
+		http.Error(w, `{"status":"unhealthy","error":"cassandra"}`, http.StatusServiceUnavailable)
+		return
+	}
+	
+	// Check Redis
 	if err := s.redis.Ping(ctx).Err(); err != nil {
-		http.Error(w, `{"status":"unhealthy"}`, http.StatusServiceUnavailable)
+		http.Error(w, `{"status":"unhealthy","error":"redis"}`, http.StatusServiceUnavailable)
 		return
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "healthy",
-		"clients":   len(s.hub.clients),
-		"node":      getEnv("NODE_ID", "node-1"),
-	})
+	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 }
 
-// Metrics handler
-func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
-	s.hub.mu.RLock()
-	clientCount := len(s.hub.clients)
-	s.hub.mu.RUnlock()
-	
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"connected_clients": clientCount,
-		"server_node":       getEnv("NODE_ID", "node-1"),
-		"timestamp":         time.Now().Unix(),
-	})
-}
-
-// Handle WebSocket connection
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// Get token from query parameter
-	tokenStr := r.URL.Query().Get("token")
-	if tokenStr == "" {
-		http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
-		return
-	}
-	
-	// Validate token
-	token, err := s.tokenAuth.Decode(tokenStr)
-	if err != nil {
-		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
-		return
-	}
-	
-	claims, _ := token.AsMap(r.Context())
-	userID := claims["user_id"].(string)
-	deviceID := r.URL.Query().Get("device_id")
-	if deviceID == "" {
-		deviceID = uuid.New().String()
-	}
-	
-	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("Failed to upgrade connection: %v", err)
-		return
-	}
-	
-	// Create client
-	client := &Client{
-		hub:        s.hub,
-		conn:       conn,
-		send:       make(chan []byte, 256),
-		userID:     userID,
-		deviceID:   deviceID,
-		serverNode: getEnv("NODE_ID", "node-1"),
-	}
-	
-	// Register client
-	s.hub.register <- client
-	
-	// Update presence in Redis
-	ctx := context.Background()
-	presenceData := map[string]interface{}{
-		"status":      "online",
-		"last_seen":   time.Now().Unix(),
-		"device_type": "web",
-		"server_node": client.serverNode,
-	}
-	presenceJSON, _ := json.Marshal(presenceData)
-	s.redis.Set(ctx, fmt.Sprintf("presence:%s", userID), presenceJSON, 5*time.Minute)
-	
-	// Publish presence update
-	s.publishPresenceEvent(userID, "online")
-	
-	// Start goroutines for reading and writing
-	go client.writePump()
-	go client.readPump(s)
-}
-
-// Read pump handles incoming messages from client
-func (c *Client) readPump(s *Server) {
-	defer func() {
-		s.hub.unregister <- c
-		c.conn.Close()
-		
-		// Update presence to offline
-		ctx := context.Background()
-		presenceData := map[string]interface{}{
-			"status":      "offline",
-			"last_seen":   time.Now().Unix(),
-			"device_type": "web",
-		}
-		presenceJSON, _ := json.Marshal(presenceData)
-		s.redis.Set(ctx, fmt.Sprintf("presence:%s", c.userID), presenceJSON, 24*time.Hour)
-		s.publishPresenceEvent(c.userID, "offline")
-	}()
-	
-	c.conn.SetReadLimit(MaxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(PongWait))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(PongWait))
-		return nil
-	})
-	
-	for {
-		_, message, err := c.conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v", err)
-			}
-			break
-		}
-		
-		// Parse incoming message
-		var wsMsg WebSocketMessage
-		if err := json.Unmarshal(message, &wsMsg); err != nil {
-			log.Printf("Failed to parse message: %v", err)
-			continue
-		}
-		
-		// Handle different message types
-		switch wsMsg.Type {
-		case "message":
-			s.handleIncomingMessage(c, wsMsg.Payload)
-		case "typing":
-			s.handleTypingIndicator(c, wsMsg.Payload)
-		case "presence":
-			s.handlePresenceUpdate(c, wsMsg.Payload)
-		case "read_receipt":
-			s.handleReadReceipt(c, wsMsg.Payload)
-		case "ping":
-			c.send <- []byte(`{"type":"pong","timestamp":` + fmt.Sprintf("%d", time.Now().Unix()) + `}`)
-		default:
-			log.Printf("Unknown message type: %s", wsMsg.Type)
-		}
-	}
-}
-
-// Write pump handles outgoing messages to client
-func (c *Client) writePump() {
-	ticker := time.NewTicker(PingPeriod)
-	defer func() {
-		ticker.Stop()
-		c.conn.Close()
-	}()
-	
-	for {
-		select {
-		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(WriteWait))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-			
-			c.conn.WriteMessage(websocket.TextMessage, message)
-			
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(WriteWait))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-		}
-	}
-}
-
-// Handle incoming message from client
-func (s *Server) handleIncomingMessage(c *Client, payload json.RawMessage) {
-	var msg struct {
-		ChatID      string `json:"chat_id"`
-		Content     string `json:"content"`
-		MessageType string `json:"message_type"`
-		ReplyTo     string `json:"reply_to,omitempty"`
-	}
-	
-	if err := json.Unmarshal(payload, &msg); err != nil {
-		log.Printf("Failed to parse message payload: %v", err)
-		return
-	}
-	
-	// Publish to Kafka for processing
-	event := map[string]interface{}{
-		"type":       "send_message",
-		"user_id":    c.userID,
-		"chat_id":    msg.ChatID,
-		"content":    msg.Content,
-		"message_type": msg.MessageType,
-		"reply_to":   msg.ReplyTo,
-		"timestamp":  time.Now().Unix(),
-	}
-	eventJSON, _ := json.Marshal(event)
-	
-	kafkaMsg := &sarama.ProducerMessage{
-		Topic: "incoming-messages",
-		Key:   sarama.StringEncoder(c.userID),
-		Value: sarama.ByteEncoder(eventJSON),
-	}
-	
-	_, _, err := s.kafkaProd.SendMessage(kafkaMsg)
-	if err != nil {
-		log.Printf("Failed to publish to Kafka: %v", err)
-		// Send error to client
-		errorMsg := OutgoingMessage{
-			Type:      "error",
-			Timestamp: time.Now(),
-			Payload:   map[string]string{"error": "failed to send message"},
-		}
-		errorJSON, _ := json.Marshal(errorMsg)
-		c.send <- errorJSON
-	}
-}
-
-// Handle typing indicator
-func (s *Server) handleTypingIndicator(c *Client, payload json.RawMessage) {
-	var typing struct {
-		ChatID string `json:"chat_id"`
-		Action string `json:"action"`
-	}
-	
-	if err := json.Unmarshal(payload, &typing); err != nil {
-		return
-	}
-	
-	event := map[string]interface{}{
-		"type":    "typing_indicator",
-		"chat_id": typing.ChatID,
-		"user_id": c.userID,
-		"action":  typing.Action,
-	}
-	eventJSON, _ := json.Marshal(event)
-	
-	kafkaMsg := &sarama.ProducerMessage{
-		Topic: "presence-events",
-		Value: sarama.ByteEncoder(eventJSON),
-	}
-	s.kafkaProd.SendMessage(kafkaMsg)
-}
-
-// Handle presence update
-func (s *Server) handlePresenceUpdate(c *Client, payload json.RawMessage) {
-	var presence struct {
-		Status string `json:"status"`
-	}
-	
-	if err := json.Unmarshal(payload, &presence); err != nil {
-		return
-	}
-	
-	ctx := context.Background()
-	presenceData := map[string]interface{}{
-		"status":      presence.Status,
-		"last_seen":   time.Now().Unix(),
-		"device_type": "web",
-		"server_node": c.serverNode,
-	}
-	presenceJSON, _ := json.Marshal(presenceData)
-	
-	expiration := 5 * time.Minute
-	if presence.Status == "offline" {
-		expiration = 24 * time.Hour
-	}
-	
-	s.redis.Set(ctx, fmt.Sprintf("presence:%s", c.userID), presenceJSON, expiration)
-	s.publishPresenceEvent(c.userID, presence.Status)
-}
-
-// Handle read receipt
-func (s *Server) handleReadReceipt(c *Client, payload json.RawMessage) {
-	var receipt struct {
-		ChatID    string `json:"chat_id"`
-		MessageID string `json:"message_id"`
-	}
-	
-	if err := json.Unmarshal(payload, &receipt); err != nil {
-		return
-	}
-	
-	event := map[string]interface{}{
-		"type":       "read_receipt",
-		"chat_id":    receipt.ChatID,
-		"message_id": receipt.MessageID,
-		"user_id":    c.userID,
-		"timestamp":  time.Now().Unix(),
-	}
-	eventJSON, _ := json.Marshal(event)
-	
-	kafkaMsg := &sarama.ProducerMessage{
-		Topic: "message-events",
-		Value: sarama.ByteEncoder(eventJSON),
-	}
-	s.kafkaProd.SendMessage(kafkaMsg)
-}
-
-// Publish presence event to Kafka
-func (s *Server) publishPresenceEvent(userID, status string) {
-	event := map[string]interface{}{
-		"type":      "presence_update",
-		"user_id":   userID,
-		"status":    status,
-		"timestamp": time.Now().Unix(),
-	}
-	eventJSON, _ := json.Marshal(event)
-	
-	kafkaMsg := &sarama.ProducerMessage{
-		Topic: "presence-events",
-		Value: sarama.ByteEncoder(eventJSON),
-	}
-	s.kafkaProd.SendMessage(kafkaMsg)
-}
-
-// Consume message events from Kafka
-func (s *Server) consumeMessageEvents() {
-	partitionConsumer, err := s.kafka.ConsumePartition("message-events", 0, sarama.OffsetNewest)
-	if err != nil {
-		log.Printf("Failed to consume message events: %v", err)
-		return
-	}
-	defer partitionConsumer.Close()
-	
-	for msg := range partitionConsumer.Messages() {
-		var event MessageEvent
-		if err := json.Unmarshal(msg.Value, &event); err != nil {
-			log.Printf("Failed to parse message event: %v", err)
-			continue
-		}
-		
-		// Deliver to recipient if online
-		s.hub.mu.RLock()
-		if client, ok := s.hub.clients[event.UserID]; ok {
-			outgoing := OutgoingMessage{
-				Type:      event.EventType,
-				Timestamp: time.Now(),
-				Payload:   event.Payload,
-			}
-			outgoingJSON, _ := json.Marshal(outgoing)
-			select {
-			case client.send <- outgoingJSON:
-			default:
-				// Client buffer full
-			}
-		}
-		s.hub.mu.RUnlock()
-	}
-}
-
-// Consume presence events from Kafka
-func (s *Server) consumePresenceEvents() {
-	partitionConsumer, err := s.kafka.ConsumePartition("presence-events", 0, sarama.OffsetNewest)
-	if err != nil {
-		log.Printf("Failed to consume presence events: %v", err)
-		return
-	}
-	defer partitionConsumer.Close()
-	
-	for msg := range partitionConsumer.Messages() {
-		var event map[string]interface{}
-		if err := json.Unmarshal(msg.Value, &event); err != nil {
-			continue
-		}
-		
-		eventType, _ := event["type"].(string)
-		if eventType == "typing_indicator" {
-			// Broadcast typing indicator to chat participants
-			chatID, _ := event["chat_id"].(string)
-			userID, _ := event["user_id"].(string)
-			action, _ := event["action"].(string)
-			
-			// Get chat participants from Redis or service
-			// For now, broadcast to all connected clients (simplified)
-			outgoing := OutgoingMessage{
-				Type:      "typing",
-				Timestamp: time.Now(),
-				Payload: map[string]string{
-					"chat_id": chatID,
-					"user_id": userID,
-					"action":  action,
-				},
-			}
-			outgoingJSON, _ := json.Marshal(outgoing)
-			
-			s.hub.mu.RLock()
-			for uid, client := range s.hub.clients {
-				if uid != userID { // Don't send to sender
-					select {
-					case client.send <- outgoingJSON:
-					default:
-					}
-				}
-			}
-			s.hub.mu.RUnlock()
-		}
-	}
-}
-
-// Consume notification events from Kafka
-func (s *Server) consumeNotificationEvents() {
-	partitionConsumer, err := s.kafka.ConsumePartition("notification-events", 0, sarama.OffsetNewest)
-	if err != nil {
-		log.Printf("Failed to consume notification events: %v", err)
-		return
-	}
-	defer partitionConsumer.Close()
-	
-	for msg := range partitionConsumer.Messages() {
-		var event map[string]interface{}
-		if err := json.Unmarshal(msg.Value, &event); err != nil {
-			continue
-		}
-		
-		// Check if recipients are online
-		recipients, _ := event["recipients"].([]interface{})
-		for _, recipient := range recipients {
-			recipientID, _ := recipient.(string)
-			
-			s.hub.mu.RLock()
-			_, online := s.hub.clients[recipientID]
-			s.hub.mu.RUnlock()
-			
-			if !online {
-				// User is offline, trigger push notification
-				s.triggerPushNotification(recipientID, event)
-			}
-		}
-	}
-}
-
-// Trigger push notification for offline user
-func (s *Server) triggerPushNotification(userID string, event map[string]interface{}) {
-	// Publish to push notification topic
-	pushEvent := map[string]interface{}{
-		"type":     "push_notification",
-		"user_id":  userID,
-		"event":    event,
-		"priority": "high",
-	}
-	pushJSON, _ := json.Marshal(pushEvent)
-	
-	kafkaMsg := &sarama.ProducerMessage{
-		Topic: "push-notifications",
-		Value: sarama.ByteEncoder(pushJSON),
-	}
-	s.kafkaProd.SendMessage(kafkaMsg)
-}
-
-// Get user presence
-func (s *Server) getUserPresence(w http.ResponseWriter, r *http.Request) {
-	userID := chi.URLParam(r, "userID")
-	
-	ctx := r.Context()
-	presenceData, err := s.redis.Get(ctx, fmt.Sprintf("presence:%s", userID)).Result()
-	if err != nil {
-		// Return offline status
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"user_id":    userID,
-			"status":     "offline",
-			"last_seen":  nil,
-		})
-		return
-	}
-	
-	var presence map[string]interface{}
-	json.Unmarshal([]byte(presenceData), &presence)
-	presence["user_id"] = userID
-	
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(presence)
-}
-
-// Update presence
-func (s *Server) updatePresence(w http.ResponseWriter, r *http.Request) {
+// Create a new chat
+func (s *Server) createChat(w http.ResponseWriter, r *http.Request) {
 	_, claims, _ := jwtauth.FromContext(r.Context())
-	userID := claims["user_id"].(string)
+	userID, _ := uuid.Parse(claims["user_id"].(string))
 	
 	var req struct {
-		Status string `json:"status"`
+		ChatType string   `json:"chat_type"`
+		Title    string   `json:"title"`
+		Members  []string `json:"members"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	
+	chatID := gocql.TimeUUID()
+	now := time.Now()
+	
+	// Insert chat
+	query := `INSERT INTO chats (chat_id, chat_type, title, created_by, created_at, updated_at) 
+	          VALUES (?, ?, ?, ?, ?, ?)`
+	if err := s.cassandra.Query(query, chatID, req.ChatType, req.Title, userID, now, now).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to create chat"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Add creator as admin
+	participantQuery := `INSERT INTO chat_participants (chat_id, user_id, role, joined_at) VALUES (?, ?, 'admin', ?)`
+	if err := s.cassandra.Query(participantQuery, chatID, userID, now).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to add participant"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Add other members
+	for _, memberIDStr := range req.Members {
+		memberID, err := uuid.Parse(memberIDStr)
+		if err != nil {
+			continue
+		}
+		s.cassandra.Query(participantQuery, chatID, memberID, now).Exec()
+	}
+	
+	chat := Chat{
+		ChatID:    chatID,
+		ChatType:  req.ChatType,
+		Title:     req.Title,
+		CreatedBy: gocql.UUID(userID),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(chat)
+}
+
+// Get user's chats
+func (s *Server) getChats(w http.ResponseWriter, r *http.Request) {
+	_, claims, _ := jwtauth.FromContext(r.Context())
+	userID, _ := uuid.Parse(claims["user_id"].(string))
+	
+	// Get chat IDs where user is a participant
+	var chatIDs []gocql.UUID
+	iter := s.cassandra.Query(
+		`SELECT chat_id FROM chat_participants WHERE user_id = ?`,
+		userID,
+	).Iter()
+	
+	var chatID gocql.UUID
+	for iter.Scan(&chatID) {
+		chatIDs = append(chatIDs, chatID)
+	}
+	iter.Close()
+	
+	// Fetch chat details
+	var chats []Chat
+	for _, cid := range chatIDs {
+		var chat Chat
+		err := s.cassandra.Query(
+			`SELECT chat_id, chat_type, title, created_by, created_at, updated_at FROM chats WHERE chat_id = ?`,
+			cid,
+		).Scan(&chat.ChatID, &chat.ChatType, &chat.Title, &chat.CreatedBy, &chat.CreatedAt, &chat.UpdatedAt)
+		
+		if err == nil {
+			chats = append(chats, chat)
+		}
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"chats": chats,
+		"count": len(chats),
+	})
+}
+
+// Get chat details
+func (s *Server) getChat(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var chat Chat
+	err = s.cassandra.Query(
+		`SELECT chat_id, chat_type, title, created_by, created_at, updated_at FROM chats WHERE chat_id = ?`,
+		chatID,
+	).Scan(&chat.ChatID, &chat.ChatType, &chat.Title, &chat.CreatedBy, &chat.CreatedAt, &chat.UpdatedAt)
+	
+	if err != nil {
+		http.Error(w, `{"error":"chat not found"}`, http.StatusNotFound)
+		return
+	}
+	
+	// Get participants
+	var participants []ChatParticipant
+	piter := s.cassandra.Query(
+		`SELECT user_id, role, joined_at, last_read_message_id FROM chat_participants WHERE chat_id = ?`,
+		chatID,
+	).Iter()
+	
+	var p ChatParticipant
+	for piter.Scan(&p.UserID, &p.Role, &p.JoinedAt, &p.LastReadMessageID) {
+		participants = append(participants, p)
+	}
+	piter.Close()
+	chat.Participants = participants
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(chat)
+}
+
+// Update chat
+func (s *Server) updateChat(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var req struct {
+		Title string `json:"title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
 		return
 	}
 	
-	ctx := r.Context()
-	presenceData := map[string]interface{}{
-		"status":      req.Status,
-		"last_seen":   time.Now().Unix(),
-		"device_type": "api",
+	query := `UPDATE chats SET title = ?, updated_at = ? WHERE chat_id = ?`
+	if err := s.cassandra.Query(query, req.Title, time.Now(), chatID).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to update chat"}`, http.StatusInternalServerError)
+		return
 	}
-	presenceJSON, _ := json.Marshal(presenceData)
-	
-	expiration := 5 * time.Minute
-	if req.Status == "offline" {
-		expiration = 24 * time.Hour
-	}
-	
-	s.redis.Set(ctx, fmt.Sprintf("presence:%s", userID), presenceJSON, expiration)
-	s.publishPresenceEvent(userID, req.Status)
 	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// Delete chat (soft delete)
+func (s *Server) deleteChat(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	query := `UPDATE chats SET chat_type = 'deleted', updated_at = ? WHERE chat_id = ?`
+	if err := s.cassandra.Query(query, time.Now(), chatID).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to delete chat"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Add participant to chat
+func (s *Server) addParticipant(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var req struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	if req.Role == "" {
+		req.Role = "member"
+	}
+	
+	query := `INSERT INTO chat_participants (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)`
+	if err := s.cassandra.Query(query, chatID, userID, req.Role, time.Now()).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to add participant"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusCreated)
+}
+
+// Remove participant from chat
+func (s *Server) removeParticipant(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	userIDStr := chi.URLParam(r, "userID")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	query := `DELETE FROM chat_participants WHERE chat_id = ? AND user_id = ?`
+	if err := s.cassandra.Query(query, chatID, userID).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to remove participant"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Update participant role
+func (s *Server) updateParticipantRole(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	userIDStr := chi.URLParam(r, "userID")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	
+	query := `UPDATE chat_participants SET role = ? WHERE chat_id = ? AND user_id = ?`
+	if err := s.cassandra.Query(query, req.Role, chatID, userID).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to update role"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// Send message
+func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
+	_, claims, _ := jwtauth.FromContext(r.Context())
+	senderID, _ := uuid.Parse(claims["user_id"].(string))
+	
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var req SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	
+	// Verify user is participant
+	var count int
+	if err := s.cassandra.Query(
+		`SELECT COUNT(*) FROM chat_participants WHERE chat_id = ? AND user_id = ?`,
+		chatID, senderID,
+	).Scan(&count); err != nil || count == 0 {
+		http.Error(w, `{"error":"not a participant"}`, http.StatusForbidden)
+		return
+	}
+	
+	// Create message
+	messageID := gocql.TimeUUID()
+	now := time.Now()
+	
+	var replyTo *gocql.UUID
+	if req.ReplyTo != "" {
+		replyUUID, err := gocql.ParseUUID(req.ReplyTo)
+		if err == nil {
+			replyTo = &replyUUID
+		}
+	}
+	
+	// Insert message
+	query := `INSERT INTO messages_by_chat (chat_id, message_id, sender_id, message_type, content, encrypted_payload, created_at, is_deleted, reply_to)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, false, ?)`
+	if err := s.cassandra.Query(query, chatID, messageID, senderID, req.MessageType, req.Content, 
+		req.EncryptedPayload, now, replyTo).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to send message"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Update chat timestamp
+	s.cassandra.Query(`UPDATE chats SET updated_at = ? WHERE chat_id = ?`, now, chatID).Exec()
+	
+	// Get recipients
+	var recipients []string
+	iter := s.cassandra.Query(
+		`SELECT user_id FROM chat_participants WHERE chat_id = ?`,
+		chatID,
+	).Iter()
+	
+	var recipientID gocql.UUID
+	for iter.Scan(&recipientID) {
+		if recipientID.String() != senderID.String() {
+			recipients = append(recipients, recipientID.String())
+		}
+	}
+	iter.Close()
+	
+	// Publish to Kafka for delivery
+	event := MessageEvent{
+		EventType:  "new_message",
+		MessageID:  messageID.String(),
+		ChatID:     chatID.String(),
+		SenderID:   senderID.String(),
+		Content:    req.Content,
+		Timestamp:  now,
+		Recipients: recipients,
+	}
+	
+	eventJSON, _ := json.Marshal(event)
+	msg := &sarama.ProducerMessage{
+		Topic: "message-events",
+		Key:   sarama.StringEncoder(chatID.String()),
+		Value: sarama.ByteEncoder(eventJSON),
+	}
+	
+	_, _, err = s.kafka.SendMessage(msg)
+	if err != nil {
+		log.Printf("Failed to publish to Kafka: %v", err)
+	}
+	
+	// Publish for push notifications
+	notifEvent := map[string]interface{}{
+		"type":       "new_message",
+		"chat_id":    chatID.String(),
+		"sender_id":  senderID.String(),
+		"recipients": recipients,
+	}
+	notifJSON, _ := json.Marshal(notifEvent)
+	notifMsg := &sarama.ProducerMessage{
+		Topic: "notification-events",
+		Value: sarama.ByteEncoder(notifJSON),
+	}
+	s.kafka.SendMessage(notifMsg)
+	
+	message := Message{
+		MessageID:        messageID,
+		ChatID:           chatID,
+		SenderID:         gocql.UUID(senderID),
+		MessageType:      req.MessageType,
+		Content:          req.Content,
+		EncryptedPayload: req.EncryptedPayload,
+		CreatedAt:        now,
+		ReplyTo:          replyTo,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(message)
+}
+
+// Get messages in chat
+func (s *Server) getMessages(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	// Parse pagination params
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+		if limit > 100 {
+			limit = 100
+		}
+	}
+	
+	before := r.URL.Query().Get("before")
+	
+	var query string
+	var iter *gocql.Iter
+	
+	if before != "" {
+		beforeUUID, err := gocql.ParseUUID(before)
+		if err != nil {
+			http.Error(w, `{"error":"invalid before parameter"}`, http.StatusBadRequest)
+			return
+		}
+		query = `SELECT message_id, sender_id, message_type, content, encrypted_payload, created_at, edited_at, is_deleted, reply_to 
+		         FROM messages_by_chat WHERE chat_id = ? AND message_id < ? ORDER BY message_id DESC LIMIT ?`
+		iter = s.cassandra.Query(query, chatID, beforeUUID, limit).Iter()
+	} else {
+		query = `SELECT message_id, sender_id, message_type, content, encrypted_payload, created_at, edited_at, is_deleted, reply_to 
+		         FROM messages_by_chat WHERE chat_id = ? ORDER BY message_id DESC LIMIT ?`
+		iter = s.cassandra.Query(query, chatID, limit).Iter()
+	}
+	
+	var messages []Message
+	var m Message
+	for iter.Scan(&m.MessageID, &m.SenderID, &m.MessageType, &m.Content, &m.EncryptedPayload,
+		&m.CreatedAt, &m.EditedAt, &m.IsDeleted, &m.ReplyTo) {
+		messages = append(messages, m)
+	}
+	iter.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"messages": messages,
+		"count":    len(messages),
+		"chat_id":  chatID,
+	})
+}
+
+// Get single message
+func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	messageIDStr := chi.URLParam(r, "messageID")
+	messageID, err := gocql.ParseUUID(messageIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid message ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var message Message
+	query := `SELECT message_id, sender_id, message_type, content, encrypted_payload, created_at, edited_at, is_deleted, reply_to 
+	          FROM messages_by_chat WHERE chat_id = ? AND message_id = ?`
+	err = s.cassandra.Query(query, chatID, messageID).Scan(
+		&message.MessageID, &message.SenderID, &message.MessageType, &message.Content,
+		&message.EncryptedPayload, &message.CreatedAt, &message.EditedAt, &message.IsDeleted, &message.ReplyTo,
+	)
+	
+	if err != nil {
+		http.Error(w, `{"error":"message not found"}`, http.StatusNotFound)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(message)
+}
+
+// Edit message
+func (s *Server) editMessage(w http.ResponseWriter, r *http.Request) {
+	_, claims, _ := jwtauth.FromContext(r.Context())
+	senderID, _ := uuid.Parse(claims["user_id"].(string))
+	
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	messageIDStr := chi.URLParam(r, "messageID")
+	messageID, err := gocql.ParseUUID(messageIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid message ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	
+	now := time.Now()
+	query := `UPDATE messages_by_chat SET content = ?, edited_at = ? WHERE chat_id = ? AND message_id = ?`
+	if err := s.cassandra.Query(query, req.Content, now, chatID, messageID).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to edit message"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Publish edit event
+	event := map[string]interface{}{
+		"type":       "message_edited",
+		"chat_id":    chatID.String(),
+		"message_id": messageID.String(),
+		"content":    req.Content,
+	}
+	eventJSON, _ := json.Marshal(event)
+	msg := &sarama.ProducerMessage{
+		Topic: "message-events",
+		Value: sarama.ByteEncoder(eventJSON),
+	}
+	s.kafka.SendMessage(msg)
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "edited"})
+}
+
+// Delete message (soft delete)
+func (s *Server) deleteMessage(w http.ResponseWriter, r *http.Request) {
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	messageIDStr := chi.URLParam(r, "messageID")
+	messageID, err := gocql.ParseUUID(messageIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid message ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	query := `UPDATE messages_by_chat SET is_deleted = true WHERE chat_id = ? AND message_id = ?`
+	if err := s.cassandra.Query(query, chatID, messageID).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to delete message"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Publish delete event
+	event := map[string]interface{}{
+		"type":       "message_deleted",
+		"chat_id":    chatID.String(),
+		"message_id": messageID.String(),
+	}
+	eventJSON, _ := json.Marshal(event)
+	msg := &sarama.ProducerMessage{
+		Topic: "message-events",
+		Value: sarama.ByteEncoder(eventJSON),
+	}
+	s.kafka.SendMessage(msg)
+	
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Mark message as read
+func (s *Server) markAsRead(w http.ResponseWriter, r *http.Request) {
+	_, claims, _ := jwtauth.FromContext(r.Context())
+	userID, _ := uuid.Parse(claims["user_id"].(string))
+	
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	messageIDStr := chi.URLParam(r, "messageID")
+	messageID, err := gocql.ParseUUID(messageIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid message ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	now := time.Now()
+	query := `INSERT INTO message_status (message_id, user_id, status, updated_at) VALUES (?, ?, 'read', ?)`
+	if err := s.cassandra.Query(query, messageID, userID, now).Exec(); err != nil {
+		http.Error(w, `{"error":"failed to mark as read"}`, http.StatusInternalServerError)
+		return
+	}
+	
+	// Update last read message for participant
+	s.cassandra.Query(
+		`UPDATE chat_participants SET last_read_message_id = ? WHERE chat_id = ? AND user_id = ?`,
+		messageID, chatID, userID,
+	).Exec()
+	
+	// Publish read receipt event
+	event := map[string]interface{}{
+		"type":       "message_read",
+		"chat_id":    chatID.String(),
+		"message_id": messageID.String(),
+		"user_id":    userID.String(),
+	}
+	eventJSON, _ := json.Marshal(event)
+	msg := &sarama.ProducerMessage{
+		Topic: "message-events",
+		Value: sarama.ByteEncoder(eventJSON),
+	}
+	s.kafka.SendMessage(msg)
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "read"})
+}
+
+// Get message status (delivered/read by whom)
+func (s *Server) getMessageStatus(w http.ResponseWriter, r *http.Request) {
+	messageIDStr := chi.URLParam(r, "messageID")
+	messageID, err := gocql.ParseUUID(messageIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid message ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var statuses []struct {
+		UserID    gocql.UUID `json:"user_id"`
+		Status    string     `json:"status"`
+		UpdatedAt time.Time  `json:"updated_at"`
+	}
+	
+	iter := s.cassandra.Query(
+		`SELECT user_id, status, updated_at FROM message_status WHERE message_id = ?`,
+		messageID,
+	).Iter()
+	
+	var s struct {
+		UserID    gocql.UUID
+		Status    string
+		UpdatedAt time.Time
+	}
+	for iter.Scan(&s.UserID, &s.Status, &s.UpdatedAt) {
+		statuses = append(statuses, s)
+	}
+	iter.Close()
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message_id": messageID,
+		"statuses":   statuses,
+	})
+}
+
+// Send typing indicator
+func (s *Server) sendTypingIndicator(w http.ResponseWriter, r *http.Request) {
+	_, claims, _ := jwtauth.FromContext(r.Context())
+	userID, _ := uuid.Parse(claims["user_id"].(string))
+	
+	chatIDStr := chi.URLParam(r, "chatID")
+	chatID, err := gocql.ParseUUID(chatIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid chat ID"}`, http.StatusBadRequest)
+		return
+	}
+	
+	var req struct {
+		Action string `json:"action"` // "typing" or "stopped"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Action = "typing"
+	}
+	
+	// Publish typing event
+	event := map[string]interface{}{
+		"type":    "typing_indicator",
+		"chat_id": chatID.String(),
+		"user_id": userID.String(),
+		"action":  req.Action,
+	}
+	eventJSON, _ := json.Marshal(event)
+	msg := &sarama.ProducerMessage{
+		Topic: "presence-events",
+		Value: sarama.ByteEncoder(eventJSON),
+	}
+	s.kafka.SendMessage(msg)
+	
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func getEnv(key, defaultValue string) string {
