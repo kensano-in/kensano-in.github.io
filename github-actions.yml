@@ -1,0 +1,212 @@
+# GitHub Actions CI/CD Pipeline
+name: Messaging Platform CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: messaging-platform
+
+jobs:
+  # Lint and test
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: Run tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.out
+
+  # Security scanning
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Build and push images
+  build-and-push:
+    needs: [lint-and-test, security-scan]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [user-service, auth-service, messaging-service, websocket-gateway]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+  # Deploy to staging
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+      url: https://api-staging.messaging.app
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name messaging-staging
+
+      - name: Deploy to staging
+        run: |
+          # Update image tags
+          sed -i 's/:v1.0.0/:staging-${{ github.sha }}/g' infrastructure/kubernetes/*-service.yaml
+          
+          # Apply manifests
+          kubectl apply -k infrastructure/kubernetes/overlays/staging/
+          
+          # Wait for rollout
+          kubectl rollout status deployment/user-service -n messaging-platform-staging
+          kubectl rollout status deployment/auth-service -n messaging-platform-staging
+          kubectl rollout status deployment/messaging-service -n messaging-platform-staging
+          kubectl rollout status deployment/websocket-gateway -n messaging-platform-staging
+
+      - name: Run smoke tests
+        run: |
+          curl -f https://api-staging.messaging.app/health || exit 1
+
+  # Deploy to production
+  deploy-production:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://api.messaging.app
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name messaging-production
+
+      - name: Deploy to production (canary)
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          
+          # Update image tags
+          sed -i "s/:v1.0.0/:${VERSION}/g" infrastructure/kubernetes/*-service.yaml
+          
+          # Apply manifests
+          kubectl apply -k infrastructure/kubernetes/overlays/production/
+          
+          # Canary deployment - wait for 10% rollout
+          kubectl rollout status deployment/user-service -n messaging-platform --timeout=5m
+
+      - name: Run production smoke tests
+        run: |
+          curl -f https://api.messaging.app/health || exit 1
+
+      - name: Notify on success
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "Production deployment successful: ${{ github.ref }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/user-service -n messaging-platform
+          kubectl rollout undo deployment/auth-service -n messaging-platform
+          kubectl rollout undo deployment/messaging-service -n messaging-platform
+          kubectl rollout undo deployment/websocket-gateway -n messaging-platform
